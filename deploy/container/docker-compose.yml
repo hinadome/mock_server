@@ -56,7 +56,7 @@ services:
       - ./nginx/runtime/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/runtime/stream.d:/etc/nginx/stream.d:ro
       - ./certs:/etc/nginx/ssl:ro
-      - certbot_webroot:/var/www/certbot:ro
+      - ./certbot-www:/var/www/certbot:ro
     networks:
       - internal
       - public
@@ -67,6 +67,3 @@ networks:
     driver: bridge
   public:
     driver: bridge
-
-volumes:
-  certbot_webroot:

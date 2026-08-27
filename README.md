@@ -32,12 +32,14 @@ WebSocket is not a separate public port in production — it shares **443** with
 
 ```bash
 # VM (host nginx + systemd)
-sudo ./deploy/deploy.sh --domain api.example.com --email you@example.com
+sudo ./deploy/deploy.sh --domain api.example.com --email you@example.com   # Certbot
+sudo ./deploy/deploy.sh --domain api.example.com --self-signed             # self-signed TLS
 # Verify first without certificates:
 sudo ./deploy/deploy.sh --domain api.example.com --no-tls
 
 # Container (Compose + nginx gateway — does not touch host nginx)
-./deploy/container/deploy.sh --domain api.example.com
+./deploy/container/deploy.sh --domain api.example.com --self-signed
+./deploy/container/deploy.sh --domain api.example.com --certbot --email you@example.com
 # Verify first without certificates:
 ./deploy/container/deploy.sh --domain api.example.com --no-tls
 ```

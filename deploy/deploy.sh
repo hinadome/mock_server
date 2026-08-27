@@ -24,6 +24,8 @@ MQTT_CLEARTEXT=0
 REMOVE_DEFAULT_SITE=0
 FORCE_CERTBOT=0
 NO_TLS=0
+SELF_SIGNED=0
+FORCE_SELF_SIGNED=0
 APP_USER=mockserver
 APP_DIR=/opt/mock-server
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,13 +41,17 @@ Usage: sudo $0 --domain <hostname> [options]
 Required:
   --domain HOST              Public DNS name for this mock-server vhost
 
-Options:
-  --email EMAIL              Let's Encrypt email (recommended)
-  --no-tls                   HTTP-only verify mode: no certificates, no certbot,
-                             no HTTPS. Use to test app/nginx before TLS setup.
+TLS certificate options (pick one path; default is Certbot when TLS is on):
+  --certbot                  Obtain/renew Let's Encrypt via certbot webroot (default)
+  --self-signed              Use openssl self-signed certs in $SSL_DIR (no certbot)
+  --force-self-signed        Regenerate self-signed even if certs already exist
+  --force-certbot            Re-run certbot even if a Let's Encrypt cert exists
+  --skip-certbot             Alias for --self-signed (compat)
+  --email EMAIL              Let's Encrypt email (recommended with --certbot)
+
+Other:
+  --no-tls                   HTTP-only verify mode: no certificates, no HTTPS.
                              Serves :80 + cleartext gRPC :50051 + MQTT :1883.
-  --skip-certbot             Never call certbot (still may use/create self-signed)
-  --force-certbot            Request/renew cert even if one exists
   --enable-ufw               Add UFW allow rules (only if UFW already active;
                              never runs 'ufw --force enable')
   --mqtt-cleartext           Also proxy public TCP 1883 → local MQTT
@@ -53,11 +59,15 @@ Options:
   --remove-default-site      Remove sites-enabled/default only (stock nginx)
   -h, --help
 
-Repeatable: re-run after git pull to rebuild/restart app and refresh our nginx
-files only. Other nginx server blocks are left alone.
+Examples:
+  sudo $0 --domain api.example.com --email you@example.com          # Certbot
+  sudo $0 --domain api.example.com --self-signed                    # self-signed TLS
+  sudo $0 --domain api.example.com --force-self-signed              # rotate self-signed
+  sudo $0 --domain api.example.com --no-tls                         # HTTP verify first
 
-Upgrade from --no-tls to TLS later:
+Upgrade from --no-tls to TLS:
   sudo $0 --domain HOST --email you@example.com
+  # or: sudo $0 --domain HOST --self-signed
 EOF
 }
 
@@ -66,8 +76,11 @@ while [[ $# -gt 0 ]]; do
     --domain) DOMAIN="${2:-}"; shift 2 ;;
     --email) EMAIL="${2:-}"; shift 2 ;;
     --no-tls) NO_TLS=1; SKIP_CERTBOT=1; MQTT_CLEARTEXT=1; shift ;;
-    --skip-certbot) SKIP_CERTBOT=1; shift ;;
-    --force-certbot) FORCE_CERTBOT=1; shift ;;
+    --certbot) SELF_SIGNED=0; SKIP_CERTBOT=0; shift ;;
+    --self-signed) SELF_SIGNED=1; SKIP_CERTBOT=1; shift ;;
+    --force-self-signed) SELF_SIGNED=1; SKIP_CERTBOT=1; FORCE_SELF_SIGNED=1; shift ;;
+    --skip-certbot) SELF_SIGNED=1; SKIP_CERTBOT=1; shift ;;
+    --force-certbot) FORCE_CERTBOT=1; SELF_SIGNED=0; SKIP_CERTBOT=0; shift ;;
     --enable-ufw) SKIP_UFW=0; shift ;;
     --mqtt-cleartext) MQTT_CLEARTEXT=1; shift ;;
     --remove-default-site) REMOVE_DEFAULT_SITE=1; shift ;;
@@ -84,6 +97,15 @@ fi
 if [[ -z "$DOMAIN" ]]; then
   echo "--domain is required"
   usage
+  exit 1
+fi
+
+if [[ "$NO_TLS" -eq 1 && ( "$SELF_SIGNED" -eq 1 || "$FORCE_CERTBOT" -eq 1 ) ]]; then
+  echo "ERROR: --no-tls cannot be combined with --self-signed / --force-certbot" >&2
+  exit 1
+fi
+if [[ "$SELF_SIGNED" -eq 1 && "$FORCE_CERTBOT" -eq 1 ]]; then
+  echo "ERROR: use either --self-signed or --force-certbot, not both" >&2
   exit 1
 fi
 
@@ -198,38 +220,99 @@ EOF
 ensure_ssl_material() {
   mkdir -p "$SSL_DIR"
   local le_dir="/etc/letsencrypt/live/$DOMAIN"
-  if [[ -f "$le_dir/fullchain.pem" && -f "$le_dir/privkey.pem" ]]; then
-    # Prefer live LE certs via relative-safe copies/symlinks in our SSL_DIR only
+  local source_file="$SSL_DIR/.tls-source"
+
+  write_tls_source() {
+    echo "$1" > "$source_file"
+    chmod 644 "$source_file" 2>/dev/null || true
+  }
+
+  read_tls_source() {
+    if [[ -f "$source_file" ]]; then
+      tr -d '[:space:]' < "$source_file"
+    elif [[ -L "$SSL_DIR/fullchain.pem" || -L "$SSL_DIR/privkey.pem" ]]; then
+      echo "letsencrypt"
+    elif [[ -f "$SSL_DIR/fullchain.pem" && -f "$SSL_DIR/privkey.pem" ]]; then
+      echo "self-signed"
+    else
+      echo ""
+    fi
+  }
+
+  link_letsencrypt() {
+    log "Pointing $SSL_DIR at Let's Encrypt for $DOMAIN (replacing any prior self-signed files)"
+    rm -f "$SSL_DIR/fullchain.pem" "$SSL_DIR/privkey.pem"
     ln -sfn "$le_dir/fullchain.pem" "$SSL_DIR/fullchain.pem"
     ln -sfn "$le_dir/privkey.pem" "$SSL_DIR/privkey.pem"
-    log "Using Let's Encrypt certs for $DOMAIN → $SSL_DIR"
+    write_tls_source "letsencrypt"
+  }
+
+  create_self_signed() {
+    log "Creating self-signed TLS material in $SSL_DIR (not touching /etc/letsencrypt)"
+    # Replace prior LE symlinks or old PEMs with real self-signed files
+    rm -f "$SSL_DIR/fullchain.pem" "$SSL_DIR/privkey.pem"
+    if ! openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
+      -keyout "$SSL_DIR/privkey.pem" \
+      -out "$SSL_DIR/fullchain.pem" \
+      -subj "/CN=$DOMAIN" \
+      -addext "subjectAltName=DNS:$DOMAIN,DNS:localhost" 2>/dev/null; then
+      openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
+        -keyout "$SSL_DIR/privkey.pem" \
+        -out "$SSL_DIR/fullchain.pem" \
+        -subj "/CN=$DOMAIN"
+    fi
+    chmod 640 "$SSL_DIR/privkey.pem"
+    chmod 644 "$SSL_DIR/fullchain.pem"
+    write_tls_source "self-signed"
+  }
+
+  local current_source
+  current_source="$(read_tls_source)"
+
+  # Explicit self-signed path (--self-signed / --force-self-signed / --skip-certbot)
+  if [[ "$SELF_SIGNED" -eq 1 ]]; then
+    if [[ "$FORCE_SELF_SIGNED" -eq 1 ]]; then
+      warn "--force-self-signed: regenerating certificate in $SSL_DIR"
+      create_self_signed
+      return 0
+    fi
+    # Switching from Let's Encrypt → self-signed must replace (even without --force)
+    if [[ "$current_source" == "letsencrypt" ]] || [[ -L "$SSL_DIR/fullchain.pem" || -L "$SSL_DIR/privkey.pem" ]]; then
+      log "Switching from Let's Encrypt to self-signed (--self-signed)"
+      create_self_signed
+      return 0
+    fi
+    if [[ -f "$SSL_DIR/fullchain.pem" && -f "$SSL_DIR/privkey.pem" ]]; then
+      log "Keeping existing self-signed certs in $SSL_DIR (use --force-self-signed to rotate)"
+      write_tls_source "self-signed"
+      return 0
+    fi
+    create_self_signed
+    return 0
+  fi
+
+  # Certbot / auto path: prefer Let's Encrypt, else keep existing, else self-signed fallback
+  if [[ -f "$le_dir/fullchain.pem" && -f "$le_dir/privkey.pem" ]]; then
+    link_letsencrypt
     return 0
   fi
 
   if [[ -f "$SSL_DIR/fullchain.pem" && -f "$SSL_DIR/privkey.pem" ]]; then
-    log "Keeping existing TLS material in $SSL_DIR"
+    log "Keeping existing TLS material in $SSL_DIR (source=$(read_tls_source))"
     return 0
   fi
 
-  log "Creating self-signed TLS material in $SSL_DIR (not touching /etc/letsencrypt)"
-  openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
-    -keyout "$SSL_DIR/privkey.pem" \
-    -out "$SSL_DIR/fullchain.pem" \
-    -subj "/CN=$DOMAIN" \
-    -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null \
-    || openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
-      -keyout "$SSL_DIR/privkey.pem" \
-      -out "$SSL_DIR/fullchain.pem" \
-      -subj "/CN=$DOMAIN"
-  chmod 640 "$SSL_DIR/privkey.pem"
+  create_self_signed
 }
 
 log "Domain: $DOMAIN"
 log "Repo:   $REPO_DIR"
 if [[ "$NO_TLS" -eq 1 ]]; then
   log "Mode:   HTTP-only verify (--no-tls; no certificates)"
+elif [[ "$SELF_SIGNED" -eq 1 ]]; then
+  log "Mode:   HTTPS with self-signed certificate (--self-signed)"
 else
-  log "Mode:   repeatable update (owned files only)"
+  log "Mode:   HTTPS with Certbot Let's Encrypt (default); self-signed fallback if needed"
 fi
 
 export DEBIAN_FRONTEND=noninteractive
@@ -473,10 +556,14 @@ if [[ "$SKIP_UFW" -eq 0 ]] && command -v ufw >/dev/null 2>&1; then
   fi
 fi
 
-# Certbot: skipped entirely in --no-tls; otherwise webroot only
+# Certificates: --no-tls skips; --self-signed uses openssl only; else Certbot then link/fallback
 LE_LIVE="/etc/letsencrypt/live/$DOMAIN"
 if [[ "$NO_TLS" -eq 1 ]]; then
-  log "Skipping certbot (--no-tls verify mode)"
+  log "Skipping certificates (--no-tls verify mode)"
+elif [[ "$SELF_SIGNED" -eq 1 ]]; then
+  log "TLS via self-signed certificate (certbot not used)"
+  ensure_ssl_material
+  nginx -t && systemctl reload nginx
 elif [[ "$SKIP_CERTBOT" -eq 0 ]]; then
   NEED_CERT=0
   if [[ "$FORCE_CERTBOT" -eq 1 ]]; then
@@ -488,7 +575,7 @@ elif [[ "$SKIP_CERTBOT" -eq 0 ]]; then
   fi
 
   if [[ "$NEED_CERT" -eq 1 ]]; then
-    log "Requesting certificate via webroot (does not rewrite other nginx sites)"
+    log "Requesting certificate via certbot webroot (does not rewrite other nginx sites)"
     mkdir -p /var/www/certbot
     CERTBOT_ARGS=(certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive --agree-tos)
     if [[ -n "$EMAIL" ]]; then
@@ -497,14 +584,24 @@ elif [[ "$SKIP_CERTBOT" -eq 0 ]]; then
       CERTBOT_ARGS+=(--register-unsafely-without-email)
     fi
     if certbot "${CERTBOT_ARGS[@]}"; then
+      # Replaces any prior self-signed PEMs in SSL_DIR with LE symlinks
       ensure_ssl_material
       nginx -t && systemctl reload nginx
-      log "Certificate installed and nginx reloaded"
+      log "Certbot certificate installed (replaced prior self-signed if present)"
     else
-      warn "certbot failed — continuing with certs in $SSL_DIR"
+      warn "certbot failed — falling back to self-signed in $SSL_DIR"
       warn "Fix DNS for $DOMAIN, then: sudo $0 --domain $DOMAIN --force-certbot"
+      warn "Or stay on self-signed: sudo $0 --domain $DOMAIN --self-signed"
+      SELF_SIGNED=1
+      ensure_ssl_material
+      nginx -t && systemctl reload nginx || true
     fi
+  else
+    # LE already on disk — ensure nginx points at it (upgrade from self-signed symlinks)
+    ensure_ssl_material
   fi
+else
+  ensure_ssl_material
 fi
 
 systemctl --no-pager --full status mock-server || true

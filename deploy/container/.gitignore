@@ -2,4 +2,8 @@
 .env.production
 docker-compose.override.yml
 certs/*.pem
+certs/.tls-source
+letsencrypt/
+certbot-www/
+!certbot-www/.gitkeep
 nginx/runtime/

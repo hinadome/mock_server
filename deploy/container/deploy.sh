@@ -24,10 +24,15 @@ SKIP_VALIDATE=0
 DO_DOWN=0
 NO_BUILD=0
 NO_TLS=0
+SELF_SIGNED=1
+USE_CERTBOT=0
+EMAIL=""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CERT_DIR="$SCRIPT_DIR/certs"
+LE_DIR="$SCRIPT_DIR/letsencrypt"
+CERTBOT_WWW="$SCRIPT_DIR/certbot-www"
 RUNTIME_CONF="$SCRIPT_DIR/nginx/runtime/conf.d"
 RUNTIME_STREAM="$SCRIPT_DIR/nginx/runtime/stream.d"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
@@ -41,27 +46,26 @@ Usage: $0 --domain <hostname> [options]
 Required (except --down):
   --domain HOST              Public DNS / Host header for PUBLIC_URL
 
-Options:
-  --no-tls                   HTTP-only verify mode: no certificates, no HTTPS.
-                             Use to test app/gateway before TLS. Serves :80,
-                             cleartext gRPC :50051, MQTT :1883.
+TLS certificate options:
+  --self-signed              openssl self-signed in deploy/container/certs/ (default)
+  --force-self-signed        Regenerate self-signed (alias: --force-certs)
+  --certbot                  Let's Encrypt via certbot (webroot); needs public DNS → :80
+  --email EMAIL              Let's Encrypt email (recommended with --certbot)
+  --force-certs              Alias for --force-self-signed
+
+Other:
+  --no-tls                   HTTP-only verify (no certificates / HTTPS)
   --env FILE                 Env file (default: deploy/container/.env.production)
-  --force-certs              Regenerate self-signed certs even if certs exist
-                             (ignored with --no-tls)
   --mqtt-cleartext           Also publish host TCP 1883 → MQTT
-                             (implied by --no-tls)
   --skip-validate            Skip post-up smoke checks
   --no-build                 docker compose up without --build
   --down                     Stop and remove this Compose stack only
   -h, --help
 
-Repeatable: re-run after code changes to rebuild/restart. Existing
-deploy/container/certs/*.pem and .env.production are preserved by default.
-
-Does NOT modify host nginx or other Compose projects.
-
-Upgrade from --no-tls to TLS later:
-  ./deploy/container/deploy.sh --domain HOST
+Examples:
+  $0 --domain api.example.com --self-signed
+  $0 --domain api.example.com --certbot --email you@example.com
+  $0 --domain api.example.com --no-tls
 EOF
 }
 
@@ -69,8 +73,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain) DOMAIN="${2:-}"; shift 2 ;;
     --env) ENV_FILE="${2:-}"; shift 2 ;;
+    --email) EMAIL="${2:-}"; shift 2 ;;
     --no-tls) NO_TLS=1; MQTT_CLEARTEXT=1; shift ;;
-    --force-certs) FORCE_CERTS=1; shift ;;
+    --self-signed) SELF_SIGNED=1; USE_CERTBOT=0; shift ;;
+    --force-self-signed|--force-certs) SELF_SIGNED=1; USE_CERTBOT=0; FORCE_CERTS=1; shift ;;
+    --certbot) USE_CERTBOT=1; SELF_SIGNED=0; shift ;;
     --mqtt-cleartext) MQTT_CLEARTEXT=1; shift ;;
     --skip-validate) SKIP_VALIDATE=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
@@ -113,6 +120,15 @@ if [[ -z "$DOMAIN" ]]; then
   exit 1
 fi
 
+if [[ "$NO_TLS" -eq 1 && ( "$USE_CERTBOT" -eq 1 || "$FORCE_CERTS" -eq 1 ) ]]; then
+  echo "ERROR: --no-tls cannot be combined with --certbot / --force-self-signed" >&2
+  exit 1
+fi
+if [[ "$USE_CERTBOT" -eq 1 && "$FORCE_CERTS" -eq 1 ]]; then
+  echo "ERROR: use either --certbot or --force-self-signed, not both" >&2
+  exit 1
+fi
+
 require_cmd docker
 if [[ "$NO_TLS" -eq 0 ]]; then
   require_cmd openssl
@@ -127,6 +143,10 @@ SCHEME="https"
 if [[ "$NO_TLS" -eq 1 ]]; then
   SCHEME="http"
   log "Mode: HTTP-only verify (--no-tls; no certificates)"
+elif [[ "$USE_CERTBOT" -eq 1 ]]; then
+  log "Mode: HTTPS with Certbot Let's Encrypt"
+else
+  log "Mode: HTTPS with self-signed certificate"
 fi
 
 # Compose always mounts deploy/container/.env.production — sync --env into that path
@@ -175,20 +195,30 @@ else
 fi
 
 # --- Certificates ---
-mkdir -p "$CERT_DIR"
+mkdir -p "$CERT_DIR" "$CERTBOT_WWW"
 FULLCHAIN="$CERT_DIR/fullchain.pem"
 PRIVKEY="$CERT_DIR/privkey.pem"
+TLS_SOURCE_FILE="$CERT_DIR/.tls-source"
 
-ensure_certs() {
-  if [[ "$FORCE_CERTS" -ne 1 && -f "$FULLCHAIN" && -f "$PRIVKEY" ]]; then
-    log "Using existing certificates in $CERT_DIR (not overridden)"
-    return 0
+write_tls_source() {
+  echo "$1" > "$TLS_SOURCE_FILE"
+  chmod 644 "$TLS_SOURCE_FILE" 2>/dev/null || true
+}
+
+read_tls_source() {
+  if [[ -f "$TLS_SOURCE_FILE" ]]; then
+    tr -d '[:space:]' < "$TLS_SOURCE_FILE"
+  elif [[ -f "$FULLCHAIN" && -f "$PRIVKEY" ]]; then
+    # Legacy deploys without marker — unknown; treat as reusable until mode switch
+    echo "unknown"
+  else
+    echo ""
   fi
-  if [[ "$FORCE_CERTS" -eq 1 ]]; then
-    warn "--force-certs: replacing certs in $CERT_DIR"
-    rm -f "$FULLCHAIN" "$PRIVKEY"
-  fi
-  log "Creating self-signed certificate for $DOMAIN (30 days) — replace with LE/production PEMs when ready"
+}
+
+create_self_signed_certs() {
+  log "Creating self-signed certificate for $DOMAIN in $CERT_DIR"
+  rm -f "$FULLCHAIN" "$PRIVKEY"
   if ! openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
     -keyout "$PRIVKEY" -out "$FULLCHAIN" \
     -subj "/CN=$DOMAIN" \
@@ -199,12 +229,79 @@ ensure_certs() {
   fi
   chmod 644 "$FULLCHAIN"
   chmod 600 "$PRIVKEY"
+  write_tls_source "self-signed"
+}
+
+ensure_certs_self_signed() {
+  local src
+  src="$(read_tls_source)"
+  if [[ "$FORCE_CERTS" -eq 1 ]]; then
+    warn "--force-self-signed: replacing certs in $CERT_DIR"
+    create_self_signed_certs
+    return 0
+  fi
+  # Switching from Let's Encrypt copies → must replace (container stores PEMs, not symlinks)
+  if [[ "$src" == "letsencrypt" ]]; then
+    log "Switching from Let's Encrypt to self-signed (--self-signed)"
+    create_self_signed_certs
+    return 0
+  fi
+  if [[ -f "$FULLCHAIN" && -f "$PRIVKEY" && ( "$src" == "self-signed" || "$src" == "unknown" ) ]]; then
+    log "Using existing certificates in $CERT_DIR (source=$src; use --force-self-signed to rotate)"
+    if [[ "$src" == "unknown" ]]; then
+      write_tls_source "self-signed"
+    fi
+    return 0
+  fi
+  create_self_signed_certs
+}
+
+install_le_certs_into_gateway() {
+  local le_live="$LE_DIR/live/$DOMAIN"
+  if [[ ! -f "$le_live/fullchain.pem" || ! -f "$le_live/privkey.pem" ]]; then
+    echo "ERROR: Let's Encrypt files missing under $le_live" >&2
+    return 1
+  fi
+  log "Installing Let's Encrypt PEMs into $CERT_DIR (replacing any prior self-signed)"
+  rm -f "$FULLCHAIN" "$PRIVKEY"
+  cp -L "$le_live/fullchain.pem" "$FULLCHAIN"
+  cp -L "$le_live/privkey.pem" "$PRIVKEY"
+  chmod 644 "$FULLCHAIN"
+  chmod 600 "$PRIVKEY"
+  write_tls_source "letsencrypt"
+  log "Installed Let's Encrypt PEMs into $CERT_DIR"
+}
+
+run_certbot() {
+  mkdir -p "$LE_DIR" "$CERTBOT_WWW"
+  local args=(certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive --agree-tos)
+  if [[ -n "$EMAIL" ]]; then
+    args+=(--email "$EMAIL")
+  else
+    args+=(--register-unsafely-without-email)
+  fi
+  # Re-run when switching from self-signed or renewing
+  if [[ -d "$LE_DIR/live/$DOMAIN" ]]; then
+    args+=(--force-renewal)
+  fi
+  log "Running certbot (DNS for $DOMAIN must point here; port 80 must reach the gateway)"
+  docker run --rm \
+    -v "$CERTBOT_WWW:/var/www/certbot" \
+    -v "$LE_DIR:/etc/letsencrypt" \
+    certbot/certbot "${args[@]}"
 }
 
 if [[ "$NO_TLS" -eq 1 ]]; then
   log "Skipping certificate setup (--no-tls)"
+elif [[ "$USE_CERTBOT" -eq 1 ]]; then
+  # Need some cert so TLS nginx config can start; then swap to LE
+  if [[ ! -f "$FULLCHAIN" || ! -f "$PRIVKEY" ]]; then
+    create_self_signed_certs
+  else
+    log "Temporary gateway cert present (will replace with Let's Encrypt after ACME)"
+  fi
 else
-  ensure_certs
+  ensure_certs_self_signed
 fi
 
 # --- Render nginx runtime configs (owned files only under this directory) ---
@@ -270,6 +367,19 @@ fi
 
 docker compose "${COMPOSE_ARGS[@]}" "${UP_ARGS[@]}"
 
+if [[ "$NO_TLS" -eq 0 && "$USE_CERTBOT" -eq 1 ]]; then
+  log "Waiting for HTTP :80 (ACME webroot) before certbot..."
+  sleep 3
+  if run_certbot && install_le_certs_into_gateway; then
+    log "Reloading gateway with Let's Encrypt certificates"
+    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --no-deps gateway
+  else
+    warn "certbot failed — continuing with certificates already in $CERT_DIR"
+    warn "Retry: $0 --domain $DOMAIN --certbot --email you@example.com"
+    warn "Or use self-signed: $0 --domain $DOMAIN --self-signed"
+  fi
+fi
+
 log "Waiting for gateway..."
 sleep 2
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -326,7 +436,8 @@ if [[ "$NO_TLS" -eq 1 ]]; then
    ./deploy/validate.sh --base http://$DOMAIN
 
  When ready for TLS, re-run WITHOUT --no-tls:
-   ./deploy/container/deploy.sh --domain $DOMAIN
+   ./deploy/container/deploy.sh --domain $DOMAIN --self-signed
+   ./deploy/container/deploy.sh --domain $DOMAIN --certbot --email you@example.com
 
  Stop this stack only:
    ./deploy/container/deploy.sh --down
@@ -356,8 +467,12 @@ else
    MQTT TLS  $DOMAIN:8883
 $([ "$MQTT_CLEARTEXT" -eq 1 ] && echo "   MQTT clear $DOMAIN:1883")
 
+ TLS mode: $([ "$USE_CERTBOT" -eq 1 ] && echo "certbot / Let's Encrypt" || echo "self-signed")
+ Certs:    $CERT_DIR
+
  Re-run / upgrade:
-   ./deploy/container/deploy.sh --domain $DOMAIN
+   ./deploy/container/deploy.sh --domain $DOMAIN --self-signed
+   ./deploy/container/deploy.sh --domain $DOMAIN --certbot --email you@example.com
 
  Validate:
    ./deploy/validate.sh --base https://$DOMAIN --insecure
@@ -367,9 +482,6 @@ $([ "$MQTT_CLEARTEXT" -eq 1 ] && echo "   MQTT clear $DOMAIN:1883")
 
  Stop this stack only:
    ./deploy/container/deploy.sh --down
-
- Replace TLS: copy PEMs to $CERT_DIR/{fullchain,privkey}.pem
- then re-run (without --force-certs) — existing files are kept.
 ============================================================
 EOF
 fi

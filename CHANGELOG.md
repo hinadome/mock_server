@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- VM `deploy/deploy.sh`: do not double-load `ngx_stream_module` on Ubuntu/Debian (already enabled via `modules-enabled`); strip duplicate `load_module` lines on re-run
+- TLS mode switches: self-signed → Certbot now reliably replaces gateway PEMs with LE; Certbot → `--self-signed` replaces LE (marker file `.tls-source`; VM uses `rm`+symlink, container detects LE copies via marker)
 - VM `deploy/deploy.sh`: more aggressive scrub of leftover `load_module …ngx_stream_module` (Debian detection + strip before every `nginx -t`; prior failed deploys left the line in place and site-config restore could not fix it)
 - VM MQTT stream: shared `mqtt-stream-upstream.conf` so `--no-tls` cleartext config no longer references a missing `mock_mqtt` upstream (was only defined in the TLS stream file)
 - VM port map: app uses internal `GRPC_PORT=15051` / `MQTT_PORT=11883` so nginx can own public `:50051` / `:1883` without EADDRINUSE (common cause of validate `rc=7` / connection refused)
