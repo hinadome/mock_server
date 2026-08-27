@@ -313,6 +313,34 @@ else
   fi
 fi
 
+# Prevent EADDRINUSE: nginx public :50051/:1883 must not match app bind ports
+ensure_internal_app_ports() {
+  local envf="$1"
+  local changed=0
+  if grep -qE '^GRPC_PORT=50051[[:space:]]*$' "$envf" 2>/dev/null || ! grep -qE '^GRPC_PORT=' "$envf" 2>/dev/null; then
+    if grep -qE '^GRPC_PORT=' "$envf" 2>/dev/null; then
+      sed -i 's/^GRPC_PORT=.*/GRPC_PORT=15051/' "$envf"
+    else
+      echo 'GRPC_PORT=15051' >> "$envf"
+    fi
+    changed=1
+  fi
+  if grep -qE '^MQTT_PORT=1883[[:space:]]*$' "$envf" 2>/dev/null || ! grep -qE '^MQTT_PORT=' "$envf" 2>/dev/null; then
+    if grep -qE '^MQTT_PORT=' "$envf" 2>/dev/null; then
+      sed -i 's/^MQTT_PORT=.*/MQTT_PORT=11883/' "$envf"
+    else
+      echo 'MQTT_PORT=11883' >> "$envf"
+    fi
+    changed=1
+  fi
+  if [[ "$changed" -eq 1 ]]; then
+    chown "$APP_USER:$APP_USER" "$envf"
+    chmod 640 "$envf"
+    log "Set internal app ports GRPC_PORT=15051 MQTT_PORT=11883 (nginx owns public 50051/1883)"
+  fi
+}
+ensure_internal_app_ports "$ENV_FILE"
+
 install -m 644 "$APP_DIR/deploy/systemd/mock-server.service" /etc/systemd/system/mock-server.service
 systemctl daemon-reload
 systemctl enable mock-server
@@ -481,10 +509,30 @@ fi
 
 systemctl --no-pager --full status mock-server || true
 
+wait_for_app_health() {
+  local url="http://127.0.0.1:3000/health"
+  local i
+  log "Waiting for mock-server health at $url"
+  for i in $(seq 1 30); do
+    if curl -sf --connect-timeout 1 "$url" >/dev/null 2>&1; then
+      log "App is healthy (attempt $i)"
+      return 0
+    fi
+    sleep 1
+  done
+  warn "App did not become healthy within 30s"
+  journalctl -u mock-server -n 40 --no-pager || true
+  return 1
+}
+
 log "Running local smoke validation (includes HTTP Streams)"
-if [[ -f "$APP_DIR/deploy/validate.sh" ]]; then
-  bash "$APP_DIR/deploy/validate.sh" --base "http://127.0.0.1:3000" || \
-    warn "validate.sh reported failures — check journalctl -u mock-server"
+if wait_for_app_health && [[ -f "$APP_DIR/deploy/validate.sh" ]]; then
+  bash "$APP_DIR/deploy/validate.sh" --base "http://127.0.0.1:3000" || {
+    warn "validate.sh reported failures — recent logs:"
+    journalctl -u mock-server -n 40 --no-pager || true
+  }
+elif [[ -f "$APP_DIR/deploy/validate.sh" ]]; then
+  warn "Skipping validate — app not healthy. Debug: journalctl -u mock-server -e"
 else
   warn "deploy/validate.sh missing under $APP_DIR — skip smoke checks"
 fi

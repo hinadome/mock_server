@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - VM `deploy/deploy.sh`: do not double-load `ngx_stream_module` on Ubuntu/Debian (already enabled via `modules-enabled`); strip duplicate `load_module` lines on re-run
 - VM `deploy/deploy.sh`: more aggressive scrub of leftover `load_module …ngx_stream_module` (Debian detection + strip before every `nginx -t`; prior failed deploys left the line in place and site-config restore could not fix it)
 - VM MQTT stream: shared `mqtt-stream-upstream.conf` so `--no-tls` cleartext config no longer references a missing `mock_mqtt` upstream (was only defined in the TLS stream file)
+- VM port map: app uses internal `GRPC_PORT=15051` / `MQTT_PORT=11883` so nginx can own public `:50051` / `:1883` without EADDRINUSE (common cause of validate `rc=7` / connection refused)
+- VM deploy: wait for `/health` before `validate.sh`; print `journalctl` on failure
 - Container `deploy/container/deploy.sh`: `--force-recreate` so nginx picks up runtime conf on re-run; `nginx -t` preflight; openssl SAN fallback; sync `--env` into Compose `.env.production`
 - Container Dockerfile: Node 22 (matches `graphql@17` engine requirement)
 - VM `deploy/deploy.sh`: install Node.js 22 (was 20) for the same engine requirement

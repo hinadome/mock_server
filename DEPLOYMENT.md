@@ -34,12 +34,12 @@ Clients
 | Public (gateway) | Protocol | Upstream (app) |
 |------------------|----------|----------------|
 | `443` | HTTPS, WSS `/ws/`, SSE, HTTP Streams, GraphQL | `:3000` / `:3001` |
-| `80` | ACME + redirect → HTTPS | — |
-| `50051` | gRPC TLS | `:50051` |
-| `8883` | MQTT TLS | `:1883` |
-| `1883` | MQTT cleartext (opt-in) | `:1883` |
+| `80` | ACME + redirect → HTTPS (or HTTP-only with `--no-tls`) | `:3000` / `:3001` |
+| `50051` | gRPC TLS / cleartext | **`127.0.0.1:15051`** (VM) |
+| `8883` | MQTT TLS | **`127.0.0.1:11883`** (VM) |
+| `1883` | MQTT cleartext (opt-in / `--no-tls`) | **`127.0.0.1:11883`** (VM) |
 
-App binds **localhost** on VM, or **private Compose network** on Container — not published directly when nginx is the gateway.
+On a VM, the app must **not** bind the same ports nginx publishes (`50051` / `1883`). Production env uses `GRPC_PORT=15051` and `MQTT_PORT=11883`. Docker Compose keeps app ports on the private network (`50051` / `1883` inside the container) — no host conflict.
 
 ---
 
@@ -266,7 +266,8 @@ docker compose restart gateway
 | gRPC / MQTT unreachable | Open `50051` / `8883`; confirm gateway published ports |
 | Env secrets missing after upgrade | Both scripts preserve `.env.production` by design |
 | `module "ngx_stream_module" is already loaded` | Ubuntu already loads stream via `/etc/nginx/modules-enabled/`. Re-run fixed `deploy/deploy.sh` (it removes the duplicate `load_module` line), or manually delete any `load_module …ngx_stream_module` from `/etc/nginx/nginx.conf` and run `nginx -t`. **Container gateway is not affected** (Alpine builds stream in; do not add `load_module` there). |
-| `no port in upstream "mock_mqtt"` | Cleartext MQTT stream needed the shared upstream file. Sync latest deploy (adds `mqtt-stream-upstream.conf`) or manually add `upstream mock_mqtt { server 127.0.0.1:1883; }` under `streams-enabled/`, then `nginx -t` |
+| `no port in upstream "mock_mqtt"` | Cleartext MQTT stream needed the shared upstream file. Sync latest deploy (adds `mqtt-stream-upstream.conf`) or manually add `upstream mock_mqtt { server 127.0.0.1:11883; }` under `streams-enabled/`, then `nginx -t` |
+| validate `rc=7` / connection refused on `:3000` | App likely crashed: nginx and app both bound `:1883`/`:50051`. Use internal ports `MQTT_PORT=11883` `GRPC_PORT=15051` in `.env.production`, restart service, check `journalctl -u mock-server -e` |
 | `graphql` EBADENGINE on Node 20 | Use Node 22+ (VM install / container `Dockerfile` now `node:22-alpine`) |
 
 ---
