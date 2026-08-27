@@ -265,6 +265,9 @@ docker compose restart gateway
 | Container validate fails on HTTPS | Use `--insecure` with self-signed; ensure ports 80/443 free |
 | gRPC / MQTT unreachable | Open `50051` / `8883`; confirm gateway published ports |
 | Env secrets missing after upgrade | Both scripts preserve `.env.production` by design |
+| `module "ngx_stream_module" is already loaded` | Ubuntu already loads stream via `/etc/nginx/modules-enabled/`. Re-run fixed `deploy/deploy.sh` (it removes the duplicate `load_module` line), or manually delete any `load_module …ngx_stream_module` from `/etc/nginx/nginx.conf` and run `nginx -t`. **Container gateway is not affected** (Alpine builds stream in; do not add `load_module` there). |
+| Container gateway still on old HTTP/TLS mode after re-run | Fixed deploy uses `--force-recreate`. Manually: `docker compose -f deploy/container/docker-compose.yml up -d --force-recreate gateway` |
+| `graphql` EBADENGINE on Node 20 | Use Node 22+ (VM install / container `Dockerfile` now `node:22-alpine`) |
 
 ---
 

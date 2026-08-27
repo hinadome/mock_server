@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- VM `deploy/deploy.sh`: do not double-load `ngx_stream_module` on Ubuntu/Debian (already enabled via `modules-enabled`); strip duplicate `load_module` lines on re-run
+- Container `deploy/container/deploy.sh`: `--force-recreate` so nginx picks up runtime conf on re-run; `nginx -t` preflight; openssl SAN fallback; sync `--env` into Compose `.env.production`
+- Container Dockerfile: Node 22 (matches `graphql@17` engine requirement)
+- VM `deploy/deploy.sh`: install Node.js 22 (was 20) for the same engine requirement
+- Container `nginx.conf`: document that Alpine stream is static (no `load_module`; unlike host Ubuntu)
+
 ## [0.1.0] — 2026-08-26
 
 Initial multi-protocol mock server release: protocols, DX surfaces, auth/TLS options, and VM + container deployment.

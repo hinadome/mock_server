@@ -133,12 +133,33 @@ ensure_nginx_http_snippet() {
 }
 
 ensure_nginx_stream() {
-  local stream_mod
-  stream_mod="$(ls /usr/lib/nginx/modules/ngx_stream_module.so 2>/dev/null || true)"
-  if [[ -n "$stream_mod" ]] && ! grep -qF 'ngx_stream_module.so' /etc/nginx/nginx.conf; then
-    backup_file /etc/nginx/nginx.conf
-    sed -i "1i load_module $stream_mod;" /etc/nginx/nginx.conf
-    log "Enabled ngx_stream_module"
+  # Ubuntu/Debian already load stream via /etc/nginx/modules-enabled/50-mod-stream.conf.
+  # Adding a second load_module causes: module "ngx_stream_module" is already loaded.
+  local mods_dir="/etc/nginx/modules-enabled"
+  local already_via_modules=0
+  if [[ -d "$mods_dir" ]] && grep -rqsF 'ngx_stream_module' "$mods_dir" 2>/dev/null; then
+    already_via_modules=1
+  fi
+
+  if [[ "$already_via_modules" -eq 1 ]]; then
+    if grep -qE '^\s*load_module\s+.*ngx_stream_module' /etc/nginx/nginx.conf; then
+      backup_file /etc/nginx/nginx.conf
+      # Strip duplicate(s) we may have inserted on an earlier failed run
+      sed -i -E '/^[[:space:]]*load_module[[:space:]]+.*ngx_stream_module/d' /etc/nginx/nginx.conf
+      log "Removed duplicate ngx_stream_module load_module (already loaded via modules-enabled)"
+    else
+      log "ngx_stream_module already enabled via modules-enabled — skipping load_module"
+    fi
+  elif ! grep -qE '^\s*load_module\s+.*ngx_stream_module' /etc/nginx/nginx.conf; then
+    local stream_mod
+    stream_mod="$(ls /usr/lib/nginx/modules/ngx_stream_module.so 2>/dev/null || true)"
+    if [[ -n "$stream_mod" ]]; then
+      backup_file /etc/nginx/nginx.conf
+      sed -i "1i load_module $stream_mod;" /etc/nginx/nginx.conf
+      log "Enabled ngx_stream_module via load_module"
+    else
+      warn "ngx_stream_module.so not found — MQTT stream proxy may fail (install nginx-module-stream if needed)"
+    fi
   fi
 
   if grep -qF 'streams-enabled' /etc/nginx/nginx.conf; then
@@ -204,10 +225,10 @@ if [[ "$NO_TLS" -eq 0 ]]; then
   apt-get install -y openssl
 fi
 
-# Node.js 20 (only install/upgrade if missing or too old)
-if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d v)" -lt 20 ]]; then
-  log "Installing Node.js 20"
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+# Node.js 22 (graphql@17 requires ^22+)
+if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d v)" -lt 22 ]]; then
+  log "Installing Node.js 22"
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
 fi
 

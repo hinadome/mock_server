@@ -129,6 +129,17 @@ if [[ "$NO_TLS" -eq 1 ]]; then
   log "Mode: HTTP-only verify (--no-tls; no certificates)"
 fi
 
+# Compose always mounts deploy/container/.env.production — sync --env into that path
+if [[ -n "${ENV_FILE}" && -f "$ENV_FILE" ]]; then
+  abs_env="$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE")"
+  abs_default="$(cd "$(dirname "$DEFAULT_ENV")" && pwd)/$(basename "$DEFAULT_ENV")"
+  if [[ "$abs_env" != "$abs_default" ]]; then
+    cp "$ENV_FILE" "$DEFAULT_ENV"
+    log "Synced --env $ENV_FILE → $DEFAULT_ENV (Compose env_file)"
+  fi
+fi
+ENV_FILE="$DEFAULT_ENV"
+
 # --- Env (preserve existing) ---
 if [[ ! -f "$ENV_FILE" ]]; then
   log "Creating $ENV_FILE from example (first run)"
@@ -178,10 +189,14 @@ ensure_certs() {
     rm -f "$FULLCHAIN" "$PRIVKEY"
   fi
   log "Creating self-signed certificate for $DOMAIN (30 days) — replace with LE/production PEMs when ready"
-  openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
+  if ! openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
     -keyout "$PRIVKEY" -out "$FULLCHAIN" \
     -subj "/CN=$DOMAIN" \
-    -addext "subjectAltName=DNS:$DOMAIN,DNS:localhost,IP:127.0.0.1"
+    -addext "subjectAltName=DNS:$DOMAIN,DNS:localhost,IP:127.0.0.1" 2>/dev/null; then
+    openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
+      -keyout "$PRIVKEY" -out "$FULLCHAIN" \
+      -subj "/CN=$DOMAIN"
+  fi
   chmod 644 "$FULLCHAIN"
   chmod 600 "$PRIVKEY"
 }
@@ -227,6 +242,11 @@ EOF
   fi
 fi
 
+# nginx include *.conf fails on some builds if the directory has zero matches
+if ! compgen -G "$RUNTIME_STREAM/*.conf" >/dev/null; then
+  echo "# placeholder — no stream servers" > "$RUNTIME_STREAM/zz-empty.conf"
+fi
+
 cd "$SCRIPT_DIR"
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
@@ -234,8 +254,16 @@ if [[ -f "$OVERRIDE_FILE" ]]; then
   COMPOSE_ARGS+=(-f "$OVERRIDE_FILE")
 fi
 
+log "Validating gateway nginx config"
+if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps gateway nginx -t; then
+  echo "ERROR: gateway nginx -t failed — check deploy/container/nginx/runtime/" >&2
+  exit 1
+fi
+
 log "Building / starting Compose stack (app + nginx gateway)"
-UP_ARGS=(up -d --remove-orphans)
+# --force-recreate so bind-mounted nginx runtime conf is picked up on re-run
+# (plain up -d leaves a running gateway with stale in-memory config)
+UP_ARGS=(up -d --remove-orphans --force-recreate)
 if [[ "$NO_BUILD" -eq 0 ]]; then
   UP_ARGS+=(--build)
 fi

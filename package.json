@@ -10,7 +10,7 @@
     "dev": "tsx watch src/index.ts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
