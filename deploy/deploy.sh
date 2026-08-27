@@ -333,11 +333,13 @@ fi
 
 SITE_AVAIL="/etc/nginx/sites-available/${SITE_NAME}.conf"
 SITE_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}.conf"
+STREAM_UPSTREAM="/etc/nginx/streams-enabled/${STREAM_NAME}-upstream.conf"
 STREAM_CONF="/etc/nginx/streams-enabled/${STREAM_NAME}.conf"
 STREAM_CLEAR="/etc/nginx/streams-enabled/${STREAM_NAME}-cleartext.conf"
 
 backup_file "$SITE_AVAIL"
 backup_file "$STREAM_CONF"
+backup_file "$STREAM_UPSTREAM"
 
 if [[ "$NO_TLS" -eq 1 ]]; then
   render_nginx "$APP_DIR/deploy/nginx/mock-server-http.conf" "$SITE_AVAIL"
@@ -359,6 +361,9 @@ else
     warn "sites-enabled/default still present (left alone). Use --remove-default-site if needed."
   fi
 fi
+
+# Shared upstream required whenever any MQTT stream server is enabled
+install -m 644 "$APP_DIR/deploy/nginx/mqtt-stream-upstream.conf" "$STREAM_UPSTREAM"
 
 if [[ "$NO_TLS" -eq 1 ]]; then
   # No TLS MQTT stream — cleartext only for verify
