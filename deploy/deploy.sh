@@ -132,25 +132,39 @@ ensure_nginx_http_snippet() {
   fi
 }
 
-ensure_nginx_stream() {
-  # Ubuntu/Debian already load stream via /etc/nginx/modules-enabled/50-mod-stream.conf.
-  # Adding a second load_module causes: module "ngx_stream_module" is already loaded.
-  local mods_dir="/etc/nginx/modules-enabled"
-  local already_via_modules=0
-  if [[ -d "$mods_dir" ]] && grep -rqsF 'ngx_stream_module' "$mods_dir" 2>/dev/null; then
-    already_via_modules=1
+# True when Ubuntu/Debian (or similar) already loads stream via modules-enabled.
+stream_loaded_via_distro() {
+  if [[ -f /etc/nginx/modules-enabled/50-mod-stream.conf ]]; then
+    return 0
   fi
+  if [[ -d /etc/nginx/modules-enabled ]] && ls /etc/nginx/modules-enabled/*stream* >/dev/null 2>&1; then
+    return 0
+  fi
+  # Packaged nginx on Debian/Ubuntu almost always includes modules-enabled
+  if [[ -f /etc/debian_version ]] && [[ -d /etc/nginx/modules-enabled ]]; then
+    return 0
+  fi
+  return 1
+}
 
-  if [[ "$already_via_modules" -eq 1 ]]; then
-    if grep -qE '^\s*load_module\s+.*ngx_stream_module' /etc/nginx/nginx.conf; then
-      backup_file /etc/nginx/nginx.conf
-      # Strip duplicate(s) we may have inserted on an earlier failed run
-      sed -i -E '/^[[:space:]]*load_module[[:space:]]+.*ngx_stream_module/d' /etc/nginx/nginx.conf
-      log "Removed duplicate ngx_stream_module load_module (already loaded via modules-enabled)"
-    else
-      log "ngx_stream_module already enabled via modules-enabled — skipping load_module"
-    fi
-  elif ! grep -qE '^\s*load_module\s+.*ngx_stream_module' /etc/nginx/nginx.conf; then
+# Strip ANY load_module …ngx_stream_module from main nginx.conf (leftover from older deploys).
+strip_duplicate_stream_load_module() {
+  if ! grep -qE 'load_module.*ngx_stream_module' /etc/nginx/nginx.conf 2>/dev/null; then
+    return 0
+  fi
+  backup_file /etc/nginx/nginx.conf
+  # Broad match: any indentation, absolute or relative module path
+  sed -i -E '/load_module.*ngx_stream_module/d' /etc/nginx/nginx.conf
+  log "Removed load_module ngx_stream_module from /etc/nginx/nginx.conf (already loaded via modules-enabled)"
+}
+
+ensure_nginx_stream() {
+  # Ubuntu/Debian: modules-enabled/50-mod-stream.conf already loads the module.
+  # A second load_module in nginx.conf → "module is already loaded".
+  if stream_loaded_via_distro; then
+    strip_duplicate_stream_load_module
+    log "ngx_stream_module provided by distro modules-enabled — not adding load_module"
+  elif ! grep -qE 'load_module.*ngx_stream_module' /etc/nginx/nginx.conf 2>/dev/null; then
     local stream_mod
     stream_mod="$(ls /usr/lib/nginx/modules/ngx_stream_module.so 2>/dev/null || true)"
     if [[ -n "$stream_mod" ]]; then
@@ -158,7 +172,7 @@ ensure_nginx_stream() {
       sed -i "1i load_module $stream_mod;" /etc/nginx/nginx.conf
       log "Enabled ngx_stream_module via load_module"
     else
-      warn "ngx_stream_module.so not found — MQTT stream proxy may fail (install nginx-module-stream if needed)"
+      warn "ngx_stream_module.so not found — MQTT stream proxy may fail (install libnginx-mod-stream if needed)"
     fi
   fi
 
@@ -376,17 +390,36 @@ for p in "${PORTS_CHECK[@]}"; do
   fi
 done
 
+# Always scrub leftover duplicate stream load_module before nginx -t (fixes prior failed deploys)
+if stream_loaded_via_distro; then
+  strip_duplicate_stream_load_module
+fi
+
 if ! nginx -t; then
-  echo "ERROR: nginx -t failed. Restoring previous site config if backup exists..."
+  echo "ERROR: nginx -t failed."
+  echo "  Tip: if you see 'ngx_stream_module is already loaded', remove any"
+  echo "  load_module …ngx_stream_module line from /etc/nginx/nginx.conf then re-run."
+  echo "  Checking for leftover load_module lines:"
+  grep -n 'load_module' /etc/nginx/nginx.conf || true
   LATEST_BAK="$(ls -1t "$BACKUP_DIR/${SITE_NAME}.conf".*.bak 2>/dev/null | head -1 || true)"
   if [[ -n "$LATEST_BAK" ]]; then
     cp -a "$LATEST_BAK" "$SITE_AVAIL"
-    nginx -t && systemctl reload nginx
     echo "Restored $SITE_AVAIL from $LATEST_BAK"
   fi
-  exit 1
+  # Attempt one more scrub + test (site restore alone cannot fix nginx.conf)
+  if stream_loaded_via_distro; then
+    strip_duplicate_stream_load_module
+  fi
+  if nginx -t; then
+    systemctl reload nginx
+    log "nginx -t OK after scrubbing duplicate stream load_module"
+  else
+    echo "ERROR: nginx -t still failing — fix /etc/nginx/nginx.conf manually"
+    exit 1
+  fi
+else
+  systemctl reload nginx
 fi
-systemctl reload nginx
 
 # UFW: never force-enable; only add rules if already active and user asked
 if [[ "$SKIP_UFW" -eq 0 ]] && command -v ufw >/dev/null 2>&1; then
