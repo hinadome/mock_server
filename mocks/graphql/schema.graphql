@@ -1,0 +1,35 @@
+type Query {
+  demo: String!
+  hello(name: String): String!
+  user(id: ID!): User
+  users: [User!]!
+}
+
+type Mutation {
+  createUser(name: String!, email: String): User!
+  updateUser(id: ID!, name: String): User!
+  deleteUser(id: ID!): DeleteResult!
+  publishOrder(item: String): OrderEvent!
+}
+
+type Subscription {
+  countdown(from: Int = 3): Int!
+  orderCreated: OrderEvent!
+}
+
+type User {
+  id: ID!
+  name: String!
+  email: String
+}
+
+type DeleteResult {
+  id: ID!
+  deleted: Boolean!
+}
+
+type OrderEvent {
+  orderId: String!
+  status: String!
+  item: String
+}

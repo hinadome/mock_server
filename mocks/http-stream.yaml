@@ -1,0 +1,39 @@
+# HTTP Streams (Fetch) — chunked response bodies for fetch().body.getReader()
+routes:
+  - match: { topic: demo }
+    description: Finite NDJSON stream (closes when done)
+    response:
+      headers:
+        Content-Type: application/x-ndjson
+      chunkDelayMs: 400
+      stream:
+        - { seq: 1, type: start, message: 'HTTP Streams (Fetch) demo' }
+        - { seq: 2, type: chunk, message: 'ReadableStream chunk 1' }
+        - { seq: 3, type: chunk, message: 'ReadableStream chunk 2' }
+        - { seq: 4, type: chunk, message: 'ReadableStream chunk 3' }
+        - { seq: 5, type: done, message: 'stream complete' }
+      keepOpen: false
+
+  - match: { topic: tokens }
+    description: Fake LLM-style token stream
+    response:
+      headers:
+        Content-Type: application/x-ndjson
+      chunkDelayMs: 200
+      stream:
+        - { token: 'The', index: 0 }
+        - { token: ' mock', index: 1 }
+        - { token: ' server', index: 2 }
+        - { token: ' streams', index: 3 }
+        - { token: ' tokens', index: 4 }
+        - { token: '.', index: 5 }
+      keepOpen: false
+
+  - match: { topic: orders.created }
+    description: Connected chunk then live bus events (NDJSON)
+    response:
+      headers:
+        Content-Type: application/x-ndjson
+      stream:
+        - { type: connected, topic: orders.created, hint: 'POST /http/orders to emit' }
+      keepOpen: true

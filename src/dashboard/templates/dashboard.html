@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mock Server — Protocol Dashboard</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #1a1a1a; background: #f6f8fa; }
+    body { max-width: 960px; margin: 0 auto; padding: 2rem 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: #555; margin-bottom: 2rem; }
+    .grid { display: grid; gap: 1rem; }
+    .card { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 1.25rem; }
+    .card h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+    .card p { margin: 0 0 0.75rem; color: #444; line-height: 1.5; }
+    .tag { display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px; background: #ddf4ff; color: #0969da; margin-bottom: 0.5rem; }
+    .tag.push { background: #dafbe1; color: #1a7f37; }
+    code, pre { background: #f0f3f6; border-radius: 4px; font-size: 0.85rem; }
+    pre { padding: 0.75rem; overflow-x: auto; margin: 0.5rem 0; }
+    button { cursor: pointer; border: 1px solid #d0d7de; background: #fff; border-radius: 6px; padding: 0.35rem 0.75rem; font-size: 0.85rem; }
+    button:hover { background: #f6f8fa; }
+    a { color: #0969da; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0 2rem; background: #fff; }
+    th, td { border: 1px solid #d0d7de; padding: 0.5rem 0.75rem; text-align: left; }
+    th { background: #f6f8fa; }
+    #inspector { margin-top: 2rem; }
+    .entry { border-bottom: 1px solid #eee; padding: 0.5rem 0; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>Mock Server</h1>
+  <p class="subtitle">Multi-protocol mock server — learn, try, and inspect traffic from local or external clients.</p>
+
+  <table>
+    <thead>
+      <tr><th>Pattern</th><th>Protocols</th><th>Best for</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Request → Response</td><td>HTTP, GraphQL, gRPC</td><td>API calls, queries, RPC</td></tr>
+      <tr><td>Streaming body</td><td>HTTP Streams (Fetch), SSE</td><td>Progressive download, tokens, events</td></tr>
+      <tr><td>Server → Client push</td><td>SSE, WebSocket, MQTT</td><td>Live updates, chat, IoT events</td></tr>
+    </tbody>
+  </table>
+
+  <div class="grid" id="protocols"></div>
+
+  <section id="inspector">
+    <h2>Request Inspector</h2>
+    <p>Recent requests from all protocols (refreshes every 3s).</p>
+    <div id="requests"></div>
+  </section>
+
+  <script>
+    const cards = [
+      { id: 'http', tag: 'pull', title: 'HTTP / REST', desc: 'Client sends a request; server returns one response. Stateless and universal.', tryPath: '/http/demo' },
+      { id: 'httpStream', tag: 'push', title: 'HTTP Streams (Fetch)', desc: 'Chunked HTTP body consumed with fetch().body.getReader() — NDJSON by default.', tryPath: '/http-stream/demo', guide: 'http-stream' },
+      { id: 'websocket', tag: 'push', title: 'WebSocket', desc: 'Persistent two-way connection. Server and client can send messages anytime.', ws: true, tryPath: '/ws/demo' },
+      { id: 'sse', tag: 'push', title: 'Server-Sent Events (SSE)', desc: 'One-way stream from server to client over HTTP. Great for live feeds.', tryPath: '/sse/demo' },
+      { id: 'graphql', tag: 'pull', title: 'GraphQL', desc: 'Single endpoint; client asks for exactly the fields it needs.', gql: true, tryPath: '/graphql/demo' },
+      { id: 'grpc', tag: 'pull', title: 'gRPC', desc: 'Fast binary RPC using Protocol Buffers. Common for service-to-service calls.', grpc: true, tryPath: '/grpc/demo' },
+      { id: 'mqtt', tag: 'push', title: 'MQTT', desc: 'Lightweight pub/sub for IoT and messaging. Publish to topics; subscribers receive.', mqtt: true },
+    ];
+
+    async function load() {
+      const discovery = await fetch('/api/discovery').then(r => r.json());
+      const container = document.getElementById('protocols');
+      container.innerHTML = '';
+
+      for (const c of cards) {
+        const p = discovery.protocols[c.id === 'websocket' ? 'websocket' : c.id];
+        const example = p?.example ?? '';
+        const guide = c.guide ?? c.id;
+        const el = document.createElement('div');
+        el.className = 'card';
+        el.innerHTML = `
+          <span class="tag ${c.tag === 'push' ? 'push' : ''}">${c.tag === 'push' ? 'server push' : 'request/response'}</span>
+          <h2>${c.title}</h2>
+          <p>${c.desc}</p>
+          <pre id="ex-${c.id}">${example.replace(/</g, '&lt;')}</pre>
+          <button onclick="copy('ex-${c.id}')">Copy example</button>
+          ${c.gql ? `<a href="/graphql" target="_blank">Open GraphiQL</a>` : ''}
+          ${c.tryPath && !c.ws ? `<a href="${c.tryPath}" target="_blank">Try it</a>` : ''}
+          <a href="/docs/protocols/${guide}" target="_blank">Read guide</a>
+        `;
+        container.appendChild(el);
+      }
+    }
+
+    function copy(id) {
+      const text = document.getElementById(id).textContent;
+      navigator.clipboard.writeText(text);
+    }
+
+    async function loadRequests() {
+      const data = await fetch('/api/requests').then(r => r.json());
+      const el = document.getElementById('requests');
+      if (!data.requests.length) {
+        el.innerHTML = '<p>No requests yet. Try a demo endpoint above.</p>';
+        return;
+      }
+      el.innerHTML = data.requests.slice(0, 10).map(r => `
+        <div class="entry">
+          <strong>${r.protocol}</strong> ${r.method || ''} ${r.path || r.topic || ''}
+          <span style="color:#666"> — ${r.clientIp || 'unknown'} — ${r.timestamp}</span>
+        </div>
+      `).join('');
+    }
+
+    load();
+    loadRequests();
+    setInterval(loadRequests, 3000);
+  </script>
+</body>
+</html>

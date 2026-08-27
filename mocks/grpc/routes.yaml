@@ -1,0 +1,25 @@
+routes:
+  - match: { service: DemoService, grpcMethod: Ping }
+    response:
+      body:
+        message: "Pong from mock: {{req.body.message}}"
+        protocol: "grpc — unary"
+
+  - match: { service: DemoService, grpcMethod: StreamPings }
+    response:
+      stream:
+        - { message: "stream-1", protocol: "grpc — server streaming" }
+        - { message: "stream-2", protocol: "grpc — server streaming" }
+        - { message: "stream-3", protocol: "grpc — server streaming" }
+
+  - match: { service: DemoService, grpcMethod: CollectPings }
+    response:
+      body:
+        message: "Collected client stream"
+        protocol: "grpc — client streaming"
+
+  - match: { service: DemoService, grpcMethod: Chat }
+    response:
+      body:
+        message: "Bidi chat session"
+        protocol: "grpc — bidirectional streaming"

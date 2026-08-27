@@ -1,0 +1,37 @@
+routes:
+  - match: { operation: hello }
+    response:
+      body: "Hello, {{req.body.name}}! (from GraphQL mock)"
+
+  - match: { operation: user }
+    response:
+      body:
+        id: "{{req.body.id}}"
+        name: Ada Lovelace
+        email: ada@example.com
+
+  - match: { operation: users }
+    response:
+      body:
+        - { id: "1", name: Ada Lovelace, email: ada@example.com }
+        - { id: "2", name: Grace Hopper, email: grace@example.com }
+
+  - match: { operation: createUser }
+    response:
+      body:
+        id: "user-new"
+        name: "{{req.body.name}}"
+        email: "{{req.body.email}}"
+
+  - match: { operation: updateUser }
+    response:
+      body:
+        id: "{{req.body.id}}"
+        name: "{{req.body.name}}"
+        email: ada@example.com
+
+  - match: { operation: deleteUser }
+    response:
+      body:
+        id: "{{req.body.id}}"
+        deleted: true

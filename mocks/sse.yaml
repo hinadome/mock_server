@@ -1,0 +1,12 @@
+routes:
+  - match: { topic: demo }
+    response:
+      body:
+        event: demo
+        message: SSE demo topic
+
+  - match: { topic: orders.created }
+    response:
+      body:
+        event: orders.created
+        message: Order created event stream

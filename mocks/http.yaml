@@ -1,0 +1,110 @@
+routes:
+  # --- Overview ---
+  - match: { method: GET, path: /http/demo }
+    description: Built-in HTTP demo / verb index
+    response:
+      status: 200
+      body:
+        message: HTTP demo — request/response over REST
+        protocol: http
+        path: /http/demo
+        yourIp: "{{req.clientIp}}"
+        verbs:
+          GET: ["GET /http/users", "GET /http/users/:id"]
+          POST: ["POST /http/users", "POST /http/orders"]
+          PUT: ["PUT /http/users/:id"]
+          PATCH: ["PATCH /http/users/:id"]
+          DELETE: ["DELETE /http/users/:id"]
+          HEAD: ["HEAD /http/users/:id"]
+          OPTIONS: ["OPTIONS /http/users"]
+
+  # --- GET (list + by id) ---
+  - match: { method: GET, path: /http/users }
+    description: List users
+    response:
+      status: 200
+      body:
+        items:
+          - { id: "1", name: Ada Lovelace, email: ada@example.com }
+          - { id: "2", name: Grace Hopper, email: grace@example.com }
+        total: 2
+
+  - match: { method: GET, path: /http/users/:id }
+    description: Get user by ID
+    response:
+      status: 200
+      body:
+        id: "{{params.id}}"
+        name: Ada Lovelace
+        email: ada@example.com
+
+  # --- POST (create) ---
+  - match: { method: POST, path: /http/users }
+    description: Create user
+    response:
+      status: 201
+      body:
+        id: "user-new"
+        name: "{{req.body.name}}"
+        email: "{{req.body.email}}"
+        created: true
+
+  - match: { method: POST, path: /http/orders }
+    description: Create order and emit event
+    response:
+      status: 201
+      body:
+        orderId: order-123
+        status: created
+        item: "{{req.body.item}}"
+      emit: orders.created
+
+  # --- PUT (full replace) ---
+  - match: { method: PUT, path: /http/users/:id }
+    description: Replace user
+    response:
+      status: 200
+      body:
+        id: "{{params.id}}"
+        name: "{{req.body.name}}"
+        email: "{{req.body.email}}"
+        replaced: true
+
+  # --- PATCH (partial update) ---
+  - match: { method: PATCH, path: /http/users/:id }
+    description: Partial update user
+    response:
+      status: 200
+      body:
+        id: "{{params.id}}"
+        name: "{{req.body.name}}"
+        patched: true
+
+  # --- DELETE ---
+  - match: { method: DELETE, path: /http/users/:id }
+    description: Delete user
+    response:
+      status: 200
+      body:
+        id: "{{params.id}}"
+        deleted: true
+
+  # --- HEAD (headers only; clients ignore body) ---
+  - match: { method: HEAD, path: /http/users/:id }
+    description: Check user exists
+    response:
+      status: 200
+      headers:
+        X-Resource-Exists: "true"
+        X-User-Id: "{{params.id}}"
+      body: {}
+
+  # --- OPTIONS (allowed methods) ---
+  - match: { method: OPTIONS, path: /http/users }
+    description: CORS / allowed methods for users collection
+    response:
+      status: 204
+      headers:
+        Allow: "GET, POST, OPTIONS"
+        Access-Control-Allow-Methods: "GET, POST, OPTIONS"
+      body: {}

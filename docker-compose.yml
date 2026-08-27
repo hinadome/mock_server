@@ -1,0 +1,11 @@
+services:
+  mock-server:
+    build: .
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "50051:50051"
+      - "1883:1883"
+    environment:
+      HOST: 0.0.0.0
+      CORS_ORIGINS: "*"

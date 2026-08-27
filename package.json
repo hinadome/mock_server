@@ -1,0 +1,42 @@
+{
+  "name": "mock-server",
+  "version": "0.1.0",
+  "description": "Multi-protocol mock server (HTTP, WebSocket, SSE, GraphQL, gRPC, MQTT)",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/static": "^10.1.3",
+    "@fastify/websocket": "^11.3.0",
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
+    "@grpc/reflection": "^1.0.4",
+    "aedes": "^1.1.1",
+    "chokidar": "^5.0.0",
+    "fastify": "^5.12.1",
+    "graphql": "^17.0.2",
+    "graphql-ws": "^6.2.1",
+    "graphql-yoga": "^5.22.0",
+    "jose": "^6.2.10",
+    "mitt": "^3.0.1",
+    "mqtt": "^5.15.2",
+    "pino": "^10.3.1",
+    "ws": "^8.21.3",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}

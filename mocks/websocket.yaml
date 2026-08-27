@@ -1,0 +1,15 @@
+routes:
+  - match: { path: /ws/demo }
+    response:
+      body:
+        type: echo
+        message: Message received via WebSocket
+        path: /ws/demo
+        actions: ["ping", "subscribe", "message"]
+
+  - match: { path: /ws/chat }
+    response:
+      body:
+        type: chat
+        message: Chat channel echo
+        path: /ws/chat

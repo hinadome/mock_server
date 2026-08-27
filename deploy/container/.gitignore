@@ -1,0 +1,5 @@
+# Local / generated — do not commit secrets or runtime TLS
+.env.production
+docker-compose.override.yml
+certs/*.pem
+nginx/runtime/

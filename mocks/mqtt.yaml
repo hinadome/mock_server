@@ -1,0 +1,16 @@
+routes:
+  - match: { topic: mqtt/demo }
+    response:
+      headers:
+        reply-topic: mqtt/demo/response
+      body:
+        message: Custom MQTT mock response
+        topic: mqtt/demo
+
+  - match: { topic: mqtt/users/created }
+    response:
+      headers:
+        reply-topic: mqtt/users/created/response
+      body:
+        event: user.created
+        message: User created via MQTT

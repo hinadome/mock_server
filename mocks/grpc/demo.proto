@@ -1,0 +1,18 @@
+syntax = "proto3";
+package demo;
+
+service DemoService {
+  rpc Ping (PingRequest) returns (PingReply);
+  rpc StreamPings (PingRequest) returns (stream PingReply);
+  rpc CollectPings (stream PingRequest) returns (PingReply);
+  rpc Chat (stream PingRequest) returns (stream PingReply);
+}
+
+message PingRequest {
+  string message = 1;
+}
+
+message PingReply {
+  string message = 1;
+  string protocol = 2;
+}

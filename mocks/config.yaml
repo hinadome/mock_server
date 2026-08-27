@@ -1,0 +1,16 @@
+# Optional unified overrides merged on top of per-protocol YAML files.
+# Prefer editing http.yaml / mqtt.yaml / etc. for day-to-day mocks.
+http:
+  routes: []
+httpStream:
+  routes: []
+websocket:
+  routes: []
+sse:
+  routes: []
+graphql:
+  routes: []
+grpc:
+  routes: []
+mqtt:
+  routes: []
